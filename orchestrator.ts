@@ -21,8 +21,10 @@ dotenv.config({ override: true });
 import * as fs from 'fs';
 import * as path from 'path';
 
+import { THRESHOLDS } from './config/thresholds';
 import { runAgent1, type WatchlistItem } from './agents/agent1-scraper';
-import { runAgent2 } from './agents/agent2-question-asker';
+import { runAgent2, type QuestionResult } from './agents/agent2-question-asker';
+import type { TickerBrief } from './lib/scraper';
 import { runAgent3 } from './agents/agent3-signal-scorer';
 import { runAgent4 } from './agents/agent4-allocator';
 import { runAgent5 } from './agents/agent5-notion-logger';
@@ -58,8 +60,29 @@ export async function runOrchestrator(): Promise<void> {
     throw new Error('Agent 1 produced 0 briefs — aborting run');
   }
 
-  // 3. Agent 2 — questions
-  const questions = await runAgent2(briefs);
+  // FIX 04 — Pre-Agent 2 low-confidence filter fork. Neutral + low confidence
+  // never reaches Agent 2; treated as auto-skip in the email.
+  const autoSkipped: TickerBrief[] = [];
+  const toQuestion: TickerBrief[] = [];
+  briefs.forEach((brief) => {
+    if (
+      brief.signal === 'neutral' &&
+      brief.confidence < THRESHOLDS.LOW_CONFIDENCE_THRESHOLD
+    ) {
+      console.log(
+        `[Orchestrator] Auto-skip ${brief.ticker} — neutral signal, confidence ${brief.confidence}/10`
+      );
+      autoSkipped.push(brief);
+    } else {
+      toQuestion.push(brief);
+    }
+  });
+  console.log(
+    `[Orchestrator] Routing: ${toQuestion.length} to Agent 2, ${autoSkipped.length} auto-skipped`
+  );
+
+  // 3. Agent 2 — questions (skipped briefs are not asked)
+  const questions: QuestionResult[] = await runAgent2(toQuestion);
 
   // 4. Agent 3 — score (single call, full context for BUY cap)
   const scored = await runAgent3(briefs, questions, date);
@@ -68,7 +91,7 @@ export async function runOrchestrator(): Promise<void> {
   const allocator = await runAgent4(scored, date);
 
   // 6. Agent 5 — Notion logger (errors logged, do not block email)
-  const { unansweredCount } = await runAgent5(
+  const { unansweredCount, notionHealthFlag } = await runAgent5(
     questions,
     scored,
     allocator,
@@ -108,6 +131,7 @@ export async function runOrchestrator(): Promise<void> {
       thesis: allocator.thesis,
       unansweredCount,
       rotations: rotationResult,
+      notionHealthFlag,
     });
     console.log('[Orchestrator] Email sent');
   } catch (e) {

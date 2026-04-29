@@ -114,7 +114,13 @@ Return JSON:
   if (start === -1 || end === -1) {
     throw new Error(`No JSON in extractor response: ${text.slice(0, 200)}`);
   }
-  return JSON.parse(text.slice(start, end + 1));
+  const parsed = JSON.parse(text.slice(start, end + 1));
+  // PATCH 02: Perplexity occasionally returns fractional confidence (e.g. 7.5).
+  // Floor to integer so downstream gates compare cleanly.
+  if (typeof parsed?.confidence === 'number') {
+    parsed.confidence = Math.floor(parsed.confidence);
+  }
+  return parsed;
 }
 
 // ---------- Source 1: Perplexity Finance via Playwright ----------

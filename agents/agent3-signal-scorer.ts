@@ -2,7 +2,10 @@
 // Per skill: stockpilot-signal-scorer (Agent 3 section).
 // Single Claude call (not parallel) so the model can enforce the 3-BUY cap globally.
 
-import { callClaude, parseJsonArray } from '../lib/claude';
+import { z } from 'zod';
+import { callClaude } from '../lib/claude';
+import { ScoredTickerSchema } from '../lib/schemas';
+import { THRESHOLDS } from '../config/thresholds';
 import type { TickerBrief } from './agent1-scraper';
 import type { QuestionResult } from './agent2-question-asker';
 
@@ -14,6 +17,30 @@ export interface ScoredSignal {
   time_horizon: '30d' | '60d' | '90d';
   entry_note: string;
   stop_note: string;
+}
+
+// PATCH 01: retry-once parser. On second failure, throws so the orchestrator can halt.
+async function parseAgent3WithRetry(
+  call: () => Promise<string>
+): Promise<ScoredSignal[]> {
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const raw = await call();
+      const cleaned = raw.replace(/```json|```/g, '').trim();
+      const jsonStart = cleaned.indexOf('[');
+      if (jsonStart === -1) throw new Error('No JSON array found in response');
+      const end = cleaned.lastIndexOf(']');
+      const parsed = JSON.parse(cleaned.slice(jsonStart, end + 1));
+      const validated = z.array(ScoredTickerSchema).parse(parsed);
+      return validated as ScoredSignal[];
+    } catch (e) {
+      lastErr = e;
+      console.error(`[Agent3] Parse attempt ${attempt} failed:`, (e as Error).message);
+      if (attempt === 2) throw e;
+    }
+  }
+  throw lastErr ?? new Error('unreachable');
 }
 
 const SCORER_SYSTEM_PROMPT = `You are a quant analyst. Score each stock for probability of outperforming the S&P 500 by 3%+ over the next 30 trading days.
@@ -75,15 +102,24 @@ Return JSON array:
 }]`;
 }
 
-// Defensive cap enforcement in case the model emits >3 BUYs.
+// FIX 01: Code-level BUY cap. Never trust the model to enforce this.
 function enforceBuyCap(scored: ScoredSignal[]): ScoredSignal[] {
+  const cap = THRESHOLDS.BUY_CAP;
   const buys = scored
     .filter((s) => s.verdict === 'BUY')
     .sort((a, b) => b.alpha_score - a.alpha_score);
 
-  if (buys.length <= 3) return scored;
+  if (buys.length <= cap) return scored;
 
-  const keep = new Set(buys.slice(0, 3).map((s) => s.ticker));
+  console.warn(
+    `[Agent3] BUY cap exceeded — ${buys.length} BUYs found, downgrading to ${cap}`
+  );
+  const keep = new Set(buys.slice(0, cap).map((s) => s.ticker));
+  buys.slice(cap).forEach((s) =>
+    console.warn(
+      `[Agent3] Downgraded ${s.ticker} BUY→WATCH (alpha: ${s.alpha_score})`
+    )
+  );
   return scored.map((s) =>
     s.verdict === 'BUY' && !keep.has(s.ticker)
       ? { ...s, verdict: 'WATCH' as const }
@@ -99,13 +135,13 @@ export async function runAgent3(
   const start = Date.now();
   console.log(`[Agent3] Start — scoring ${briefs.length} tickers`);
 
-  const text = await callClaude({
-    systemPrompt: SCORER_SYSTEM_PROMPT,
-    userPrompt: buildScorerPrompt(briefs, questions, date),
-    maxTokens: 2000,
-  });
-
-  const scored = parseJsonArray<ScoredSignal>(text);
+  const scored = await parseAgent3WithRetry(() =>
+    callClaude({
+      systemPrompt: SCORER_SYSTEM_PROMPT,
+      userPrompt: buildScorerPrompt(briefs, questions, date),
+      maxTokens: 2000,
+    })
+  );
   const capped = enforceBuyCap(scored);
 
   const buys = capped.filter((s) => s.verdict === 'BUY').length;

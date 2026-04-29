@@ -7,6 +7,8 @@
 //   <4.0 / SKIP → 0%, omitted
 
 import { callClaude, parseJsonObject } from '../lib/claude';
+import { AllocatorOutputSchema } from '../lib/schemas';
+import { THRESHOLDS } from '../config/thresholds';
 import type { ScoredSignal } from './agent3-signal-scorer';
 
 export interface AllocationItem {
@@ -85,21 +87,21 @@ function enforceTiers(
       if (s.verdict === 'SKIP') return null;
 
       let tier = 0;
-      let pct = 0;
       if (s.verdict === 'BUY') {
-        if (s.alpha_score >= 8.0) {
-          tier = 1;
-          pct = 5;
-        } else if (s.alpha_score >= 6.0) {
-          tier = 2;
-          pct = 3;
-        } else {
-          return null;
-        }
+        if (s.alpha_score >= 8.0) tier = 1;
+        else if (s.alpha_score >= 6.0) tier = 2;
+        else return null;
       } else if (s.verdict === 'WATCH') {
         tier = 3;
-        pct = 1.5;
       }
+      const expected = THRESHOLDS.TIER_PCT[tier];
+      if (a.position_pct !== expected) {
+        console.warn(
+          `[Agent4] position_pct drift on ${a.ticker}: ` +
+            `LLM returned ${a.position_pct}%, correcting to ${expected}% (Tier ${tier})`
+        );
+      }
+      const pct = expected;
 
       return {
         ticker: a.ticker,
@@ -125,7 +127,17 @@ export async function runAgent4(
     maxTokens: 2000,
   });
 
-  const parsed = parseJsonObject<AllocatorOutput>(text);
+  const rawParsed = parseJsonObject<unknown>(text);
+  // Validate via Zod, but fall back to a permissive read of allocation/thesis
+  // so a single bad field never blocks allocation (enforceTiers re-derives sizing).
+  const validated = AllocatorOutputSchema.safeParse(rawParsed);
+  if (!validated.success) {
+    console.error(
+      '[Agent4] Schema validation failed, falling back to raw parse:',
+      validated.error.issues.slice(0, 3)
+    );
+  }
+  const parsed = (validated.success ? validated.data : (rawParsed as AllocatorOutput));
   const allocation = enforceTiers(parsed.allocation || [], scored);
 
   console.log(

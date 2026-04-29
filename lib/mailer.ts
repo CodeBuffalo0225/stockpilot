@@ -1,10 +1,10 @@
-// nodemailer HTML report sender.
+// Resend HTML report sender.
 // Subject: "StockPilot — {DATE} — {N} BUYs, {N} WATCHes"
 // Sections: BUYs w/ allocation, daily thesis, WATCHes, unanswered count.
 
 import * as dotenv from 'dotenv';
 dotenv.config({ override: true });
-import nodemailer from 'nodemailer';
+import { Resend } from 'resend';
 import type { AllocationItem, ScoredRecord } from './notion';
 import type { Agent8Result } from '../agents/agent8-rotation-suggester';
 
@@ -15,17 +15,21 @@ export interface EmailReport {
   thesis: string;
   unansweredCount: number;
   rotations?: Agent8Result;
+  notionHealthFlag?: string;
 }
 
-const transporter = nodemailer.createTransport({
-  host: 'smtp.gmail.com',
-  port: 465,
-  secure: true,
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS,
-  },
-});
+// Lazy-init so a missing key doesn't crash module load.
+let _resend: Resend | null = null;
+function getClient(): Resend | null {
+  const key = process.env.RESEND_API_KEY;
+  if (!key) return null;
+  if (!_resend) _resend = new Resend(key);
+  return _resend;
+}
+
+// Resend's sandbox `from` — works without domain verification; only delivers
+// to the account's signup email. Override with REPORT_FROM once you verify a domain.
+const DEFAULT_FROM = 'StockPilot <onboarding@resend.dev>';
 
 function buildHtml(r: EmailReport): string {
   const buys = r.scored.filter((s) => s.verdict === 'BUY');
@@ -130,26 +134,45 @@ function buildRotationsHtml(rot: Agent8Result | undefined): string {
 }
 
 export async function sendReportEmail(r: EmailReport): Promise<void> {
+  const client = getClient();
+  if (!client) {
+    console.log('[mailer] RESEND_API_KEY not set — skipping email (report is still saved to reports/).');
+    return;
+  }
+  const to = process.env.REPORT_EMAIL;
+  if (!to) {
+    console.log('[mailer] REPORT_EMAIL not set — skipping email.');
+    return;
+  }
+
   const buys = r.scored.filter((s) => s.verdict === 'BUY').length;
   const watches = r.scored.filter((s) => s.verdict === 'WATCH').length;
-  const subject = `StockPilot — ${r.date} — ${buys} BUYs, ${watches} WATCHes`;
+  const flagSuffix = r.notionHealthFlag ? ` | ${r.notionHealthFlag}` : '';
+  const subject = `StockPilot — ${r.date} — ${buys} BUYs, ${watches} WATCHes${flagSuffix}`;
 
-  await transporter.sendMail({
-    from: process.env.SMTP_USER,
-    to: process.env.REPORT_EMAIL,
+  const { error } = await client.emails.send({
+    from: process.env.REPORT_FROM || DEFAULT_FROM,
+    to,
     subject,
     html: buildHtml(r),
   });
+  if (error) throw new Error(`Resend error: ${error.name}: ${error.message}`);
 }
 
 export async function sendFailureEmail(err: unknown): Promise<void> {
   try {
-    await transporter.sendMail({
-      from: process.env.SMTP_USER,
-      to: process.env.REPORT_EMAIL,
+    const client = getClient();
+    if (!client) return; // silently skip — we already logged the run failure elsewhere
+    const to = process.env.REPORT_EMAIL;
+    if (!to) return;
+
+    const { error } = await client.emails.send({
+      from: process.env.REPORT_FROM || DEFAULT_FROM,
+      to,
       subject: `StockPilot — FAILED ${new Date().toISOString()}`,
       text: `StockPilot run failed:\n\n${(err as Error)?.stack ?? String(err)}`,
     });
+    if (error) throw new Error(`Resend error: ${error.name}: ${error.message}`);
   } catch (e) {
     console.error('[mailer] Failure email also failed:', e);
   }

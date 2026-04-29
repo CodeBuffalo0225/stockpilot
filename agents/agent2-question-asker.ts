@@ -3,6 +3,7 @@
 // answerable=false routes to Agent 5 (Notion); true routes to Agent 3.
 
 import { callClaude, parseJsonObject } from '../lib/claude';
+import { QuestionOutputSchema } from '../lib/schemas';
 import type { TickerBrief } from './agent1-scraper';
 
 export interface QuestionResult {
@@ -20,6 +21,20 @@ Your job is to ask the 3 hardest questions an investor MUST answer before acting
 - Expose whether this is real edge or just noise.
 - Be direct. Never hedge. One sentence per question.
 - Think about: institutional positioning, options flow, technical levels, sector rotation, macro context, valuation headroom.
+
+Return ONLY valid JSON. No preamble. No markdown.`;
+
+// FIX 05 — bearish-specific framing. Forked at the call site by signal direction.
+const DUNLAP_BEARISH_SYSTEM_PROMPT = `You are Ian Dunlap from Earn Your Leisure. You are a disciplined portfolio
+manager who has just seen a bearish signal on a stock.
+
+Your job is to ask the 3 hardest questions an investor MUST answer before
+deciding whether to avoid, hedge, or short this position. Rules:
+- Never describe what happened. You already read the brief.
+- Ask what this bearish signal means for downside over the next 30-90 days.
+- Expose whether the bad news is already priced in or if there is more to fall.
+- Ask about short interest, put/call ratio, and institutional exits.
+- Be direct. Never hedge. One sentence per question.
 
 Return ONLY valid JSON. No preamble. No markdown.`;
 
@@ -47,12 +62,25 @@ async function askQuestions(
   attempt = 0
 ): Promise<QuestionResult | null> {
   try {
+    const systemPrompt =
+      brief.signal === 'bearish'
+        ? DUNLAP_BEARISH_SYSTEM_PROMPT
+        : DUNLAP_SYSTEM_PROMPT;
     const text = await callClaude({
-      systemPrompt: DUNLAP_SYSTEM_PROMPT,
+      systemPrompt,
       userPrompt: buildUserPrompt(brief),
       maxTokens: 300,
     });
-    return parseJsonObject<QuestionResult>(text);
+    const raw = parseJsonObject<unknown>(text);
+    const validated = QuestionOutputSchema.safeParse(raw);
+    if (!validated.success) {
+      console.error(
+        `[Agent2] Schema validation failed for ${brief.ticker}:`,
+        validated.error.issues.slice(0, 3)
+      );
+      return raw as QuestionResult;
+    }
+    return validated.data as QuestionResult;
   } catch (e) {
     if (attempt === 0) {
       console.warn(`[Agent2] ${brief.ticker} failed, retrying...`);

@@ -13,6 +13,7 @@ import type { AllocatorOutput } from './agent4-allocator';
 
 export interface Agent5Result {
   unansweredCount: number;
+  notionHealthFlag: string;
 }
 
 export async function runAgent5(
@@ -26,6 +27,8 @@ export async function runAgent5(
 
   const unanswered = questions.filter((q) => !q.answerable);
   let unansweredCount = 0;
+  let notionSuccessCount = 0;
+  const notionAttempts = unanswered.length + 1; // +1 for daily report
 
   // DB 1 — Unanswered questions. Per-record try/catch so one bad write
   // never blocks the rest.
@@ -33,6 +36,7 @@ export async function runAgent5(
     try {
       await logUnansweredQuestion(q, scored);
       unansweredCount += q.questions.length;
+      notionSuccessCount++;
     } catch (e) {
       console.error(
         `[Agent5] Notion DB1 write failed for ${q.ticker}:`,
@@ -52,12 +56,19 @@ export async function runAgent5(
 
   try {
     await logDailyReport(report);
+    notionSuccessCount++;
   } catch (e) {
     console.error('[Agent5] Notion DB2 write failed:', (e as Error).message);
   }
 
+  // FIX 06 / PATCH 03: total-failure flag returned to orchestrator (no module-scope export).
+  const notionHealthFlag =
+    notionSuccessCount === 0 && notionAttempts > 0
+      ? '⚠️ NOTION WRITES FAILED'
+      : `Notion: ${notionSuccessCount}/${notionAttempts}`;
+
   console.log(
-    `[Agent5] End — ${unansweredCount} questions logged (${Date.now() - start}ms)`
+    `[Agent5] End — ${unansweredCount} questions logged | ${notionHealthFlag} (${Date.now() - start}ms)`
   );
-  return { unansweredCount };
+  return { unansweredCount, notionHealthFlag };
 }

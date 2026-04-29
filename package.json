@@ -16,14 +16,14 @@
     "better-sqlite3": "^11.3.0",
     "dotenv": "^16.4.5",
     "node-cron": "^3.0.3",
-    "nodemailer": "^6.9.15",
-    "playwright": "^1.59.1"
+    "playwright": "^1.59.1",
+    "resend": "^4.0.1",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.11",
     "@types/node": "^22.5.0",
     "@types/node-cron": "^3.0.11",
-    "@types/nodemailer": "^6.4.16",
     "ts-node": "^10.9.2",
     "typescript": "^5.5.4"
   }
