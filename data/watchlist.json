@@ -10,5 +10,8 @@
   { "ticker": "UNH",  "name": "UnitedHealth Group",       "sector": "Healthcare" },
   { "ticker": "LMT",  "name": "Lockheed Martin",          "sector": "Industrials/Defense" },
   { "ticker": "CMI",  "name": "Cummins",                  "sector": "Industrials/Machinery" },
-  { "ticker": "NEE",  "name": "NextEra Energy",           "sector": "Utilities" }
+  { "ticker": "NEE",  "name": "NextEra Energy",           "sector": "Utilities" },
+  { "ticker": "AMD",  "name": "AMD",                      "sector": "Semiconductors" },
+  { "ticker": "SNDK", "name": "SanDisk",                  "sector": "Semiconductors/Memory" },
+  { "ticker": "COHR", "name": "Coherent",                 "sector": "Semiconductors/Photonics" }
 ]

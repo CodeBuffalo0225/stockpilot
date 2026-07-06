@@ -9,7 +9,13 @@
 //   30d > 3.0%
 
 import { pendingScoresForWindow, insertOutcome } from '../lib/db';
-import { addTradingDays, fetchEodPriceOn, pctChange } from '../lib/prices';
+import {
+  addTradingDays,
+  fetchEodPriceOn,
+  getEodFetchStats,
+  pctChange,
+  resetEodFetchStats,
+} from '../lib/prices';
 
 export const WINDOWS = [5, 15, 30] as const;
 
@@ -29,6 +35,7 @@ export interface Agent7Result {
 export async function runAgent7(date: string): Promise<Agent7Result> {
   const start = Date.now();
   console.log(`[Agent7] Start — scoring matured outcomes`);
+  resetEodFetchStats();
 
   const result: Agent7Result = {
     scored_5d: 0,
@@ -54,10 +61,12 @@ export async function runAgent7(date: string): Promise<Agent7Result> {
         fetchEodPriceOn('SPY', exitDate),
       ]);
 
+      // fetchEodPriceOn falls back to Yahoo internally, so null here means
+      // BOTH sources missed — the only case worth a per-ticker warning.
       if (tickerExit == null || spyExit == null) {
         result.failed_lookups++;
         console.warn(
-          `[Agent7] ${p.ticker} ${window}d: missing EOD (ticker=${tickerExit}, spy=${spyExit}) — will retry next run`
+          `[Agent7] ${p.ticker} ${window}d: missing EOD from both FMP and Yahoo (ticker=${tickerExit}, spy=${spyExit}) — will retry next run`
         );
         continue;
       }
@@ -81,6 +90,16 @@ export async function runAgent7(date: string): Promise<Agent7Result> {
       else if (window === 15) result.scored_15d++;
       else if (window === 30) result.scored_30d++;
     }
+  }
+
+  // One aggregate line for source health instead of a per-ticker wall.
+  const eod = getEodFetchStats();
+  if (eod.fmp_failed > 0) {
+    console.log(
+      `[Agent7] FMP missed ${eod.fmp_failed} lookups across ${eod.fmp_failed_symbols.length} symbols` +
+        (eod.fmp_last_status != null ? ` (last HTTP ${eod.fmp_last_status})` : '') +
+        `; Yahoo fallback served ${eod.yahoo_fallback}, both failed ${eod.both_failed}`
+    );
   }
 
   console.log(

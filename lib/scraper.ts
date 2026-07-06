@@ -10,6 +10,7 @@ dotenv.config({ override: true });
 import { chromium, type Browser } from 'playwright';
 import Anthropic from '@anthropic-ai/sdk';
 import { CLAUDE_MODEL } from './claude';
+import { fetchSpotQuote } from './marketdata';
 
 export interface TickerBrief {
   ticker: string;
@@ -64,6 +65,22 @@ export async function fetchFMPQuote(ticker: string): Promise<FMPQuote | null> {
     console.error(`[FMP] Quote failed for ${ticker}:`, (err as Error).message);
     return null;
   }
+}
+
+// ---------- Quote (Yahoo primary, FMP fallback) ----------
+// FMP's free tier now returns HTTP 402 for most symbols, which was silently
+// nulling out price context and dropping momentum-sleeve names. Yahoo's keyless
+// chart endpoint is the working primary; FMP stays as a secondary.
+export async function fetchQuoteCompat(ticker: string): Promise<FMPQuote | null> {
+  const y = await fetchSpotQuote(ticker);
+  if (y) {
+    const pct = y.change_pct;
+    return {
+      price: y.price.toString(),
+      change_pct: `${pct > 0 ? '+' : ''}${pct.toFixed(2)}%`,
+    };
+  }
+  return fetchFMPQuote(ticker);
 }
 
 // ---------- Claude signal extractor ----------
@@ -166,8 +183,8 @@ async function scrapeOnce(
 
     if (!headlines.length) return null;
 
-    // Quote page is Cloudflare-blocked → use FMP stable/quote instead.
-    const quote = await fetchFMPQuote(ticker);
+    // Quote page is Cloudflare-blocked → use Yahoo (FMP fallback) instead.
+    const quote = await fetchQuoteCompat(ticker);
 
     const brief = await extractSignalFromHeadlines(
       ticker,
@@ -213,7 +230,7 @@ export async function scrapePerplexityFinance(
 // neutral "price-only" brief so Agent 3 has something to score. Uses the
 // quote endpoint (free) and synthesizes a minimal headline.
 export async function fetchFMPBrief(ticker: string): Promise<TickerBrief | null> {
-  const quote = await fetchFMPQuote(ticker);
+  const quote = await fetchQuoteCompat(ticker);
   if (!quote) return null;
 
   const synthHeadline = `${ticker} quote-only fallback: ${quote.price} (${quote.change_pct})`;

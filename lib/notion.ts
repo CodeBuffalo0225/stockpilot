@@ -46,6 +46,24 @@ function todayIso(): string {
   return new Date().toISOString().split('T')[0];
 }
 
+// Notion caps each rich_text segment at 2000 chars. Split long content into
+// multiple ≤2000-char segments (Notion allows several per property) so no
+// field ever fails validation and nothing is truncated.
+const NOTION_RICH_TEXT_LIMIT = 2000;
+
+export function toRichText(
+  content: string
+): Array<{ text: { content: string } }> {
+  if (content.length <= NOTION_RICH_TEXT_LIMIT) {
+    return [{ text: { content } }];
+  }
+  const segments: Array<{ text: { content: string } }> = [];
+  for (let i = 0; i < content.length; i += NOTION_RICH_TEXT_LIMIT) {
+    segments.push({ text: { content: content.slice(i, i + NOTION_RICH_TEXT_LIMIT) } });
+  }
+  return segments;
+}
+
 // DB 1 — Unanswered Questions. One Notion page per question.
 export async function logUnansweredQuestion(
   q: QuestionRecord,
@@ -67,7 +85,7 @@ export async function logUnansweredQuestion(
         Ticker: { select: { name: q.ticker } },
         Date: { date: { start: todayIso() } },
         Reason: {
-          rich_text: [{ text: { content: q.unanswered_reason || '' } }],
+          rich_text: toRichText(q.unanswered_reason || ''),
         },
         Status: { select: { name: 'Needs Research' } },
         Priority: { select: { name: priority } },
@@ -114,17 +132,17 @@ export async function logDailyReport(report: DailyReport): Promise<void> {
         ],
       },
       Date: { date: { start: report.date } },
-      Buys: { rich_text: [{ text: { content: buysText || '(none)' } }] },
+      Buys: { rich_text: toRichText(buysText || '(none)') },
       Watches: {
-        rich_text: [{ text: { content: watchesText || '(none)' } }],
+        rich_text: toRichText(watchesText || '(none)'),
       },
       Skips: {
-        rich_text: [{ text: { content: skipsText || '(none)' } }],
+        rich_text: toRichText(skipsText || '(none)'),
       },
       Allocation: {
-        rich_text: [{ text: { content: allocationText } }],
+        rich_text: toRichText(allocationText),
       },
-      Thesis: { rich_text: [{ text: { content: report.thesis } }] },
+      Thesis: { rich_text: toRichText(report.thesis) },
       'Unanswered Count': { number: report.unansweredCount },
     },
   });

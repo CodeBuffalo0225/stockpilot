@@ -7,6 +7,7 @@ dotenv.config({ override: true });
 import { Resend } from 'resend';
 import type { AllocationItem, ScoredRecord } from './notion';
 import type { Agent8Result } from '../agents/agent8-rotation-suggester';
+import type { ScoredMomentum } from './momentum';
 
 export interface EmailReport {
   date: string;
@@ -16,6 +17,8 @@ export interface EmailReport {
   unansweredCount: number;
   rotations?: Agent8Result;
   notionHealthFlag?: string;
+  momentum?: { sleeve: string[]; ranked: ScoredMomentum[] };
+  suppressed?: string[];
 }
 
 // Lazy-init so a missing key doesn't crash module load.
@@ -67,6 +70,9 @@ function buildHtml(r: EmailReport): string {
       <h2>StockPilot — ${r.date}</h2>
       <p><b>${buys.length} BUYs</b> · <b>${watches.length} WATCHes</b> · ${r.unansweredCount} unanswered questions logged to Notion</p>
 
+      <h3>0. Momentum Sleeve — today's movers</h3>
+      ${buildMomentumHtml(r.momentum)}
+
       <h3>1. Today's BUYs</h3>
       ${
         buyRows
@@ -97,8 +103,52 @@ function buildHtml(r: EmailReport): string {
 
       <h3>5. Watchlist Rotation Suggestions</h3>
       ${buildRotationsHtml(r.rotations)}
+
+      ${
+        r.suppressed && r.suppressed.length
+          ? `<p style="font-size:12px;color:#888;margin-top:18px;">Quiet (suppressed — neutral &amp; low-confidence for ${''}several runs): ${r.suppressed.join(', ')}</p>`
+          : ''
+      }
     </body>
   </html>`;
+}
+
+// Section 0 — momentum board. Highlights the dynamic sleeve names plus the
+// ranked leaders so Travis sees movers the day they start running.
+function buildMomentumHtml(
+  m: { sleeve: string[]; ranked: ScoredMomentum[] } | undefined
+): string {
+  if (!m || m.ranked.length === 0) {
+    return '<p><i>No momentum data this run.</i></p>';
+  }
+  const sleeveSet = new Set(m.sleeve);
+  const rows = m.ranked
+    .map((x) => {
+      const inSleeve = sleeveSet.has(x.ticker);
+      return `
+        <tr style="${inSleeve ? 'background:#ecfdf5;' : ''}">
+          <td><b>${x.ticker}</b>${inSleeve ? ' &#11088;' : ''}</td>
+          <td>${x.momentum_score.toFixed(1)}</td>
+          <td>${x.rs_excess_63d >= 0 ? '+' : ''}${x.rs_excess_63d.toFixed(1)}</td>
+          <td>${x.ret_21d >= 0 ? '+' : ''}${x.ret_21d.toFixed(1)}%</td>
+          <td>${x.vol_surge.toFixed(2)}x</td>
+          <td>${(x.pct_of_52w_high * 100).toFixed(0)}%</td>
+        </tr>`;
+    })
+    .join('');
+  const sleeveLabel = m.sleeve.length
+    ? `Added to today's run (&#11088;): <b>${m.sleeve.join(', ')}</b>`
+    : 'No names cleared the momentum floor today — sleeve empty.';
+  return `
+    <p style="margin:0 0 6px 0;font-size:13px;">${sleeveLabel}</p>
+    <table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;width:100%;font-size:13px;">
+      <thead>
+        <tr style="background:#f3f4f6;">
+          <th>Ticker</th><th>Score</th><th>RS vs SPY (63d)</th><th>1mo</th><th>Vol surge</th><th>% of 52w high</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>`;
 }
 
 function buildRotationsHtml(rot: Agent8Result | undefined): string {

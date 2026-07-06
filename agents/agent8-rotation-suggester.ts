@@ -145,6 +145,13 @@ export async function runAgent8(
         health_summary: f.summary,
         candidates: candidates.slice(0, 3),
       });
+      // FIX 08 — daily report parses stdout only; surface each suggestion.
+      const top = candidates[0];
+      console.log(
+        `[Agent8] rotate: ${f.ticker} → out (${f.reason}), top candidate: ${
+          top ? `${top.ticker} — ${top.rationale}` : 'none'
+        }`
+      );
     } catch (e) {
       console.error(
         `[Agent8] Claude failed for ${f.ticker}:`,

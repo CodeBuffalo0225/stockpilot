@@ -22,7 +22,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 import { THRESHOLDS } from './config/thresholds';
+import { runAgent0 } from './agents/agent0-momentum-screener';
 import { runAgent1, type WatchlistItem } from './agents/agent1-scraper';
+import { updateSuppression } from './lib/suppression';
 import { runAgent2, type QuestionResult } from './agents/agent2-question-asker';
 import type { TickerBrief } from './lib/scraper';
 import { runAgent3 } from './agents/agent3-signal-scorer';
@@ -50,9 +52,29 @@ export async function runOrchestrator(): Promise<void> {
   const date = todayIso();
   console.log(`\n========== StockPilot run ${date} ==========`);
 
-  // 1. Load watchlist
-  const watchlist = loadWatchlist();
-  console.log(`[Orchestrator] Loaded ${watchlist.length} tickers`);
+  // 1. Load the fixed core watchlist
+  const core = loadWatchlist();
+  console.log(`[Orchestrator] Loaded ${core.length} core tickers`);
+
+  // 1b. Agent 0 — momentum screen → dynamic sleeve of today's movers.
+  //     Core + sleeve = the effective watchlist for this run.
+  let agent0Result;
+  try {
+    agent0Result = await runAgent0(core, date);
+  } catch (e) {
+    console.error('[Orchestrator] Agent 0 failed:', (e as Error).message);
+  }
+  const sleeve = agent0Result?.sleeve ?? [];
+  const sleeveSet = new Set(sleeve.map((s) => s.ticker));
+  const coreSet = new Set(core.map((c) => c.ticker));
+  // Dedupe (sleeve already excludes core, but be defensive).
+  const watchlist: WatchlistItem[] = [
+    ...core,
+    ...sleeve.filter((s) => !coreSet.has(s.ticker)),
+  ];
+  console.log(
+    `[Orchestrator] Effective watchlist: ${core.length} core + ${sleeve.length} momentum sleeve = ${watchlist.length}`
+  );
 
   // 2. Agent 1 — scrape Perplexity Finance + FMP fallback
   const briefs = await runAgent1(watchlist);
@@ -80,6 +102,15 @@ export async function runOrchestrator(): Promise<void> {
   console.log(
     `[Orchestrator] Routing: ${toQuestion.length} to Agent 2, ${autoSkipped.length} auto-skipped`
   );
+
+  // FIX 05 — Repeat-suppression. Core names that have been neutral + low-conf
+  // for QUIET_SUPPRESS_DAYS consecutive runs are demoted out of the main email.
+  const suppression = updateSuppression(briefs, coreSet, date);
+  if (suppression.suppressed.length) {
+    console.log(
+      `[Orchestrator] Suppressing quiet core names: ${suppression.suppressed.join(', ')}`
+    );
+  }
 
   // 3. Agent 2 — questions (skipped briefs are not asked)
   const questions: QuestionResult[] = await runAgent2(toQuestion);
@@ -115,9 +146,10 @@ export async function runOrchestrator(): Promise<void> {
   }
 
   // 9. Agent 8 — rotation suggestions (informational — approval via `npm run rotate`)
+  //     Operates on the fixed CORE only — the sleeve rotates itself daily.
   let rotationResult;
   try {
-    rotationResult = await runAgent8(watchlist, date);
+    rotationResult = await runAgent8(core, date);
   } catch (e) {
     console.error('[Orchestrator] Agent 8 failed:', (e as Error).message);
   }
@@ -132,6 +164,10 @@ export async function runOrchestrator(): Promise<void> {
       unansweredCount,
       rotations: rotationResult,
       notionHealthFlag,
+      momentum: agent0Result
+        ? { sleeve: agent0Result.sleeve.map((s) => s.ticker), ranked: agent0Result.ranked.slice(0, 12) }
+        : undefined,
+      suppressed: suppression.suppressed,
     });
     console.log('[Orchestrator] Email sent');
   } catch (e) {
@@ -148,7 +184,17 @@ export async function runOrchestrator(): Promise<void> {
     JSON.stringify(
       {
         date,
+        core,
+        sleeve: sleeve.map((s) => s.ticker),
         watchlist,
+        momentum: agent0Result
+          ? {
+              screened: agent0Result.screened,
+              skipped: agent0Result.skipped,
+              ranked: agent0Result.ranked,
+            }
+          : null,
+        suppression,
         briefs,
         questions,
         scored,

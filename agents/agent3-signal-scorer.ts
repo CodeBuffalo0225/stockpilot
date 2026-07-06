@@ -139,7 +139,8 @@ export async function runAgent3(
     callClaude({
       systemPrompt: SCORER_SYSTEM_PROMPT,
       userPrompt: buildScorerPrompt(briefs, questions, date),
-      maxTokens: 2000,
+      // ~120 output tokens per ticker; 2000 truncated at >16 tickers
+      maxTokens: Math.max(4000, briefs.length * 250),
     })
   );
   const capped = enforceBuyCap(scored);

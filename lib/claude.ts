@@ -1,5 +1,5 @@
 // Anthropic Claude client wrapper.
-// Per global build rules: model fixed to 'claude-sonnet-4-20250514' for all calls.
+// Per global build rules: model fixed to 'claude-sonnet-4-6' for all calls.
 
 // Force override — parent shell may export empty ANTHROPIC_API_KEY etc.
 import * as dotenv from 'dotenv';
@@ -7,7 +7,7 @@ dotenv.config({ override: true });
 
 import Anthropic from '@anthropic-ai/sdk';
 
-export const CLAUDE_MODEL = 'claude-sonnet-4-20250514';
+export const CLAUDE_MODEL = 'claude-sonnet-4-6';
 
 const client = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
@@ -30,6 +30,11 @@ export async function callClaude(opts: ClaudeCallOptions): Promise<string> {
   const block = res.content[0];
   if (!block || block.type !== 'text') {
     throw new Error('Claude returned no text content');
+  }
+  if (res.stop_reason === 'max_tokens') {
+    throw new Error(
+      `Claude response truncated at max_tokens=${opts.maxTokens} — raise the budget for this call`
+    );
   }
   return block.text;
 }

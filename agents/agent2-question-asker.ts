@@ -57,6 +57,12 @@ Return:
 Set answerable=false if answering requires data not in this brief (options chain, insider flow, earnings transcripts, etc.) and explain what data source is needed in unanswered_reason.`;
 }
 
+// FIX 07 — 300 tokens truncated real briefs (lost COHR on 2026-07-06).
+// Base budget 1024; the retry escalates so a truncation never fails twice
+// at the same ceiling.
+const BASE_MAX_TOKENS = 1024;
+const RETRY_MAX_TOKENS = 2048;
+
 async function askQuestions(
   brief: TickerBrief,
   attempt = 0
@@ -69,7 +75,7 @@ async function askQuestions(
     const text = await callClaude({
       systemPrompt,
       userPrompt: buildUserPrompt(brief),
-      maxTokens: 300,
+      maxTokens: attempt === 0 ? BASE_MAX_TOKENS : RETRY_MAX_TOKENS,
     });
     const raw = parseJsonObject<unknown>(text);
     const validated = QuestionOutputSchema.safeParse(raw);
