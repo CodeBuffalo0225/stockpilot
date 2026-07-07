@@ -6,7 +6,7 @@
 // verdicts so future reports / analysis can use the full record.
 
 import { insertCall, callExistsForToday } from '../lib/db';
-import { fetchQuoteSnap } from '../lib/prices';
+import { fetchQuoteSnapCompat } from '../lib/prices';
 import type { ScoredSignal } from './agent3-signal-scorer';
 import type { TickerBrief } from './agent1-scraper';
 
@@ -32,7 +32,9 @@ export async function runAgent6(
   console.log(`[Agent6] Start — persisting ${scored.length} calls`);
 
   // SPY snapshot once per run; same value attached to every call today.
-  const spy = await fetchQuoteSnap('SPY');
+  // Yahoo-first (fetchQuoteSnapCompat) — FMP's free tier 402s on most
+  // symbols, which previously left this null and outcomes unscorable.
+  const spy = await fetchQuoteSnapCompat('SPY');
   const spyPrice = spy?.price ?? null;
   if (!spyPrice) {
     console.warn('[Agent6] SPY price unavailable — outcomes will not be scorable');

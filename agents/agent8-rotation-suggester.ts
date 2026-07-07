@@ -10,15 +10,33 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
-import { computeTickerHealth, tickersInCooldown } from '../lib/db';
+import { computeTickerHealth, tickersInCooldown, type TickerHealth } from '../lib/db';
 import { callClaude, parseJsonArray } from '../lib/claude';
 import type { WatchlistItem } from './agent1-scraper';
 
-const HIT_RATE_FLOOR = 0.33;
-const MIN_SCORED_CALLS = 5;
+export const HIT_RATE_FLOOR = 0.33;
+export const MIN_SCORED_CALLS = 5;
 const COOLDOWN_DAYS = 60; // calendar days (cooldown table uses calendar dates)
 
-type FlagReason = 'hit_rate_failure' | 'silent_30d';
+export type FlagReason = 'hit_rate_failure' | 'silent_30d';
+
+// Pure — no I/O. The rotation trigger rule (Phase 3 trigger D) isolated for
+// unit testing: flag if 30d hit-rate < floor with enough sample size, OR if
+// zero BUY signals fired in the last 30 trading days for a ticker that has
+// actually been tracked that long.
+export function evaluateTickerHealth(
+  health: TickerHealth,
+  trackedAtLeast30Days: boolean
+): FlagReason | null {
+  const hitRateFails =
+    health.scored_calls_30d >= MIN_SCORED_CALLS && health.hit_rate_30d < HIT_RATE_FLOOR;
+  if (hitRateFails) return 'hit_rate_failure';
+
+  const silent = health.buy_signals_last_30d === 0;
+  if (silent && trackedAtLeast30Days) return 'silent_30d';
+
+  return null;
+}
 
 export interface RotationSuggestion {
   ticker_out: string;
@@ -88,20 +106,13 @@ export async function runAgent8(
     const ratePct = (h.hit_rate_30d * 100).toFixed(0);
     const summary = `${h.scored_calls_30d} scored BUYs, ${ratePct}% 30d hit-rate, ${h.buy_signals_last_30d} BUY signals in last 30d`;
 
-    const hitRateFails =
-      h.scored_calls_30d >= MIN_SCORED_CALLS &&
-      h.hit_rate_30d < HIT_RATE_FLOOR;
-    const silent = h.buy_signals_last_30d === 0;
-
-    if (hitRateFails) {
-      flagged.push({ ticker: w.ticker, reason: 'hit_rate_failure', summary });
-    } else if (silent) {
-      // Silent-30d only makes sense for tickers that have been tracked for
-      // ≥30 calendar days. Otherwise we'd flag every ticker on day 1 simply
-      // because it hasn't accumulated 30 days of history yet.
-      if (tickerTrackedAtLeast(w.ticker, date, 30)) {
-        flagged.push({ ticker: w.ticker, reason: 'silent_30d', summary });
-      }
+    // Silent-30d only makes sense for tickers that have been tracked for
+    // ≥30 calendar days. Otherwise we'd flag every ticker on day 1 simply
+    // because it hasn't accumulated 30 days of history yet.
+    const trackedAtLeast30Days = tickerTrackedAtLeast(w.ticker, date, 30);
+    const reason = evaluateTickerHealth(h, trackedAtLeast30Days);
+    if (reason) {
+      flagged.push({ ticker: w.ticker, reason, summary });
     }
   }
 

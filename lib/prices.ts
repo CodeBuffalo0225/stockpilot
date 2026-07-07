@@ -77,6 +77,19 @@ export async function fetchQuoteSnap(ticker: string): Promise<QuoteSnap | null> 
   }
 }
 
+// Yahoo-first quote snap. FMP's free tier 402s on most symbols (see the
+// module banner), which left Agent 6's SPY entry price null whenever FMP
+// was blocked — outcome scoring then had nothing to compare against and
+// silently never learned. Yahoo's keyless chart endpoint is the working
+// primary everywhere else in this codebase (see marketdata.ts); mirror that
+// here and keep FMP as the fallback instead of the other way around.
+export async function fetchQuoteSnapCompat(ticker: string): Promise<QuoteSnap | null> {
+  const { fetchSpotQuote } = await import('./marketdata');
+  const y = await fetchSpotQuote(ticker);
+  if (y) return { price: y.price, change_pct: y.change_pct };
+  return fetchQuoteSnap(ticker);
+}
+
 // ---------- EOD fetch stats (aggregate error visibility) ----------
 
 // Module-level counters so callers (e.g., Agent 7) can log ONE summary line

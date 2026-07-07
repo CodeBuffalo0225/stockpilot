@@ -11,6 +11,7 @@ import { chromium, type Browser } from 'playwright';
 import Anthropic from '@anthropic-ai/sdk';
 import { CLAUDE_MODEL } from './claude';
 import { fetchSpotQuote } from './marketdata';
+import { TickerBriefSchema } from './schemas';
 
 export interface TickerBrief {
   ticker: string;
@@ -133,11 +134,23 @@ Return JSON:
   }
   const parsed = JSON.parse(text.slice(start, end + 1));
   // PATCH 02: Perplexity occasionally returns fractional confidence (e.g. 7.5).
-  // Floor to integer so downstream gates compare cleanly.
+  // Floor to integer so downstream gates compare cleanly (and before validation).
   if (typeof parsed?.confidence === 'number') {
     parsed.confidence = Math.floor(parsed.confidence);
   }
-  return parsed;
+  // Degrade loudly: a malformed extractor response (missing field, wrong
+  // type, out-of-range confidence) must not silently flow into Agent 3's
+  // scoring as if it were a real signal. Throw so the caller's retry/skip
+  // path handles it the same way as a network failure.
+  const validated = TickerBriefSchema.safeParse(parsed);
+  if (!validated.success) {
+    throw new Error(
+      `Extractor response failed schema validation for ${ticker}: ${validated.error.issues
+        .map((i) => `${i.path.join('.')}: ${i.message}`)
+        .join('; ')}`
+    );
+  }
+  return validated.data;
 }
 
 // ---------- Source 1: Perplexity Finance via Playwright ----------

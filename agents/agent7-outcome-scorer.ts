@@ -19,11 +19,39 @@ import {
 
 export const WINDOWS = [5, 15, 30] as const;
 
-const HIT_THRESHOLD: Record<number, number> = {
+export const HIT_THRESHOLD: Record<number, number> = {
   5: 0.0,
   15: 1.0,
   30: 3.0,
 };
+
+export interface OutcomeComputation {
+  ticker_return_pct: number;
+  spy_return_pct: number;
+  excess_return_pct: number;
+  hit: 0 | 1;
+}
+
+// Pure — no I/O. Isolated so the hit-rate math (the actual money rule) can
+// be unit tested without mocking price fetches or SQLite.
+export function computeOutcome(
+  entryPrice: number,
+  exitPrice: number,
+  spyEntryPrice: number,
+  spyExitPrice: number,
+  windowDays: 5 | 15 | 30
+): OutcomeComputation {
+  const tickerRet = pctChange(entryPrice, exitPrice);
+  const spyRet = pctChange(spyEntryPrice, spyExitPrice);
+  const excess = tickerRet - spyRet;
+  const hit = excess > HIT_THRESHOLD[windowDays] ? 1 : 0;
+  return {
+    ticker_return_pct: tickerRet,
+    spy_return_pct: spyRet,
+    excess_return_pct: excess,
+    hit: hit as 0 | 1,
+  };
+}
 
 export interface Agent7Result {
   scored_5d: number;
@@ -71,19 +99,19 @@ export async function runAgent7(date: string): Promise<Agent7Result> {
         continue;
       }
 
-      const tickerRet = pctChange(p.entry_price, tickerExit);
-      const spyRet = pctChange(p.spy_entry_price, spyExit);
-      const excess = tickerRet - spyRet;
-      const hit = excess > HIT_THRESHOLD[window] ? 1 : 0;
+      const outcome = computeOutcome(
+        p.entry_price,
+        tickerExit,
+        p.spy_entry_price,
+        spyExit,
+        window as 5 | 15 | 30
+      );
 
       insertOutcome({
         call_id: p.call_id,
         window_days: window as 5 | 15 | 30,
         scored_date: date,
-        ticker_return_pct: tickerRet,
-        spy_return_pct: spyRet,
-        excess_return_pct: excess,
-        hit: hit as 0 | 1,
+        ...outcome,
       });
 
       if (window === 5) result.scored_5d++;

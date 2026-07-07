@@ -11,7 +11,7 @@ import * as path from 'path';
 import { THRESHOLDS } from '../config/thresholds';
 import type { TickerBrief } from './scraper';
 
-const STATE_PATH = path.join(__dirname, '..', 'data', 'suppression-state.json');
+const DEFAULT_STATE_PATH = path.join(__dirname, '..', 'data', 'suppression-state.json');
 
 interface QuietEntry {
   quiet_streak: number;
@@ -19,17 +19,17 @@ interface QuietEntry {
 }
 type SuppressionState = Record<string, QuietEntry>;
 
-function loadState(): SuppressionState {
-  if (!fs.existsSync(STATE_PATH)) return {};
+function loadState(statePath: string): SuppressionState {
+  if (!fs.existsSync(statePath)) return {};
   try {
-    return JSON.parse(fs.readFileSync(STATE_PATH, 'utf-8')) as SuppressionState;
+    return JSON.parse(fs.readFileSync(statePath, 'utf-8')) as SuppressionState;
   } catch {
     return {};
   }
 }
 
-function saveState(state: SuppressionState): void {
-  fs.writeFileSync(STATE_PATH, JSON.stringify(state, null, 2));
+function saveState(statePath: string, state: SuppressionState): void {
+  fs.writeFileSync(statePath, JSON.stringify(state, null, 2));
 }
 
 function isQuiet(brief: TickerBrief): boolean {
@@ -52,9 +52,10 @@ export interface SuppressionResult {
 export function updateSuppression(
   briefs: TickerBrief[],
   coreTickers: Set<string>,
-  date: string
+  date: string,
+  statePath: string = DEFAULT_STATE_PATH
 ): SuppressionResult {
-  const state = loadState();
+  const state = loadState(statePath);
   const suppressed: string[] = [];
   const streaks: Record<string, number> = {};
 
@@ -69,6 +70,6 @@ export function updateSuppression(
     if (next >= THRESHOLDS.QUIET_SUPPRESS_DAYS) suppressed.push(brief.ticker);
   }
 
-  saveState(state);
+  saveState(statePath, state);
   return { suppressed, streaks };
 }

@@ -19,48 +19,122 @@ export function getDb(): Database.Database {
   return _db;
 }
 
+// Ordered, idempotent migrations. Each runs at most once per DB, tracked in
+// schema_migrations. Append new migrations to the end — never edit a
+// migration that has already shipped.
+const MIGRATIONS: Array<{ version: number; name: string; sql: string }> = [
+  {
+    version: 1,
+    name: 'init',
+    sql: `
+      CREATE TABLE IF NOT EXISTS calls (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        call_date       TEXT    NOT NULL,
+        ticker          TEXT    NOT NULL,
+        verdict         TEXT    NOT NULL,
+        alpha_score     REAL,
+        confidence      INTEGER,
+        reasoning       TEXT,
+        entry_note      TEXT,
+        stop_note       TEXT,
+        entry_price     REAL,
+        spy_entry_price REAL,
+        source          TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_calls_ticker_date  ON calls(ticker, call_date);
+      CREATE INDEX IF NOT EXISTS idx_calls_verdict_date ON calls(verdict, call_date);
+
+      CREATE TABLE IF NOT EXISTS outcomes (
+        call_id           INTEGER NOT NULL,
+        window_days       INTEGER NOT NULL,
+        scored_date       TEXT    NOT NULL,
+        ticker_return_pct REAL,
+        spy_return_pct    REAL,
+        excess_return_pct REAL,
+        hit               INTEGER,
+        PRIMARY KEY (call_id, window_days),
+        FOREIGN KEY (call_id) REFERENCES calls(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS rotations (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        rotation_date TEXT    NOT NULL,
+        ticker_out    TEXT    NOT NULL,
+        ticker_in     TEXT    NOT NULL,
+        reason        TEXT    NOT NULL,
+        approved_by   TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_rotations_out_date ON rotations(ticker_out, rotation_date);
+      CREATE INDEX IF NOT EXISTS idx_rotations_in_date  ON rotations(ticker_in, rotation_date);
+    `,
+  },
+  {
+    // callExistsForToday already guarded application-level inserts, but
+    // nothing stopped a concurrent/duplicate run from double-inserting a
+    // (ticker, call_date) pair at the DB level. Enforce it as a constraint.
+    version: 2,
+    name: 'unique_calls_ticker_date',
+    sql: `
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_calls_unique_ticker_date
+        ON calls(ticker, call_date);
+    `,
+  },
+  {
+    // Run/stage bookkeeping so the orchestrator can resume a partially
+    // failed run instead of losing all completed stages to logs only.
+    version: 3,
+    name: 'runs_and_agent_runs',
+    sql: `
+      CREATE TABLE IF NOT EXISTS runs (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_date    TEXT    NOT NULL UNIQUE,
+        status      TEXT    NOT NULL DEFAULT 'running',
+        started_at  TEXT    NOT NULL,
+        finished_at TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS agent_runs (
+        run_id      INTEGER NOT NULL,
+        agent_name  TEXT    NOT NULL,
+        status      TEXT    NOT NULL,
+        output_json TEXT,
+        error       TEXT,
+        started_at  TEXT    NOT NULL,
+        finished_at TEXT    NOT NULL,
+        PRIMARY KEY (run_id, agent_name),
+        FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE CASCADE
+      );
+    `,
+  },
+];
+
 function migrate(db: Database.Database): void {
   db.exec(`
-    CREATE TABLE IF NOT EXISTS calls (
-      id              INTEGER PRIMARY KEY AUTOINCREMENT,
-      call_date       TEXT    NOT NULL,
-      ticker          TEXT    NOT NULL,
-      verdict         TEXT    NOT NULL,
-      alpha_score     REAL,
-      confidence      INTEGER,
-      reasoning       TEXT,
-      entry_note      TEXT,
-      stop_note       TEXT,
-      entry_price     REAL,
-      spy_entry_price REAL,
-      source          TEXT
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      version    INTEGER PRIMARY KEY,
+      name       TEXT    NOT NULL,
+      applied_at TEXT    NOT NULL
     );
-    CREATE INDEX IF NOT EXISTS idx_calls_ticker_date  ON calls(ticker, call_date);
-    CREATE INDEX IF NOT EXISTS idx_calls_verdict_date ON calls(verdict, call_date);
-
-    CREATE TABLE IF NOT EXISTS outcomes (
-      call_id           INTEGER NOT NULL,
-      window_days       INTEGER NOT NULL,
-      scored_date       TEXT    NOT NULL,
-      ticker_return_pct REAL,
-      spy_return_pct    REAL,
-      excess_return_pct REAL,
-      hit               INTEGER,
-      PRIMARY KEY (call_id, window_days),
-      FOREIGN KEY (call_id) REFERENCES calls(id) ON DELETE CASCADE
-    );
-
-    CREATE TABLE IF NOT EXISTS rotations (
-      id            INTEGER PRIMARY KEY AUTOINCREMENT,
-      rotation_date TEXT    NOT NULL,
-      ticker_out    TEXT    NOT NULL,
-      ticker_in     TEXT    NOT NULL,
-      reason        TEXT    NOT NULL,
-      approved_by   TEXT
-    );
-    CREATE INDEX IF NOT EXISTS idx_rotations_out_date ON rotations(ticker_out, rotation_date);
-    CREATE INDEX IF NOT EXISTS idx_rotations_in_date  ON rotations(ticker_in, rotation_date);
   `);
+
+  const applied = new Set(
+    (db.prepare('SELECT version FROM schema_migrations').all() as { version: number }[]).map(
+      (r) => r.version
+    )
+  );
+
+  const insertMigration = db.prepare(
+    'INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)'
+  );
+
+  for (const m of MIGRATIONS) {
+    if (applied.has(m.version)) continue;
+    const run = db.transaction(() => {
+      db.exec(m.sql);
+      insertMigration.run(m.version, m.name, new Date().toISOString());
+    });
+    run();
+  }
 }
 
 // ---------- Call persistence (Agent 6) ----------
@@ -225,6 +299,84 @@ export function tickersInCooldown(
     )
     .all(todayIso, cooldownDays) as { ticker: string }[];
   return new Set(rows.map((r) => r.ticker));
+}
+
+// ---------- Run / stage checkpointing (resumability) ----------
+
+export interface RunRow {
+  id: number;
+  run_date: string;
+  status: string;
+  started_at: string;
+  finished_at: string | null;
+}
+
+// One run per calendar date. If today's run already exists (e.g. a retry
+// after a mid-run crash), reuse it so completed stages can be replayed from
+// their checkpoints instead of re-executed.
+export function getOrCreateRun(runDate: string): RunRow {
+  const db = getDb();
+  const existing = db
+    .prepare('SELECT * FROM runs WHERE run_date = ?')
+    .get(runDate) as RunRow | undefined;
+  if (existing) return existing;
+
+  const result = db
+    .prepare(
+      `INSERT INTO runs (run_date, status, started_at) VALUES (?, 'running', ?)`
+    )
+    .run(runDate, new Date().toISOString());
+  return db
+    .prepare('SELECT * FROM runs WHERE id = ?')
+    .get(Number(result.lastInsertRowid)) as RunRow;
+}
+
+export function finishRun(runId: number, status: 'ok' | 'failed'): void {
+  const db = getDb();
+  db.prepare(`UPDATE runs SET status = ?, finished_at = ? WHERE id = ?`).run(
+    status,
+    new Date().toISOString(),
+    runId
+  );
+}
+
+export interface AgentRunRow {
+  run_id: number;
+  agent_name: string;
+  status: 'ok' | 'failed';
+  output_json: string | null;
+  error: string | null;
+  started_at: string;
+  finished_at: string;
+}
+
+// Cached output from a previously *successful* stage in this run, if any.
+// Failed stages are not returned — they must re-execute on retry.
+export function getCheckpoint(runId: number, agentName: string): unknown | null {
+  const db = getDb();
+  const row = db
+    .prepare(
+      `SELECT output_json FROM agent_runs WHERE run_id = ? AND agent_name = ? AND status = 'ok'`
+    )
+    .get(runId, agentName) as { output_json: string | null } | undefined;
+  if (!row || row.output_json == null) return null;
+  return JSON.parse(row.output_json);
+}
+
+export function recordAgentRun(row: AgentRunRow): void {
+  const db = getDb();
+  db.prepare(
+    `
+    INSERT INTO agent_runs (run_id, agent_name, status, output_json, error, started_at, finished_at)
+    VALUES (@run_id, @agent_name, @status, @output_json, @error, @started_at, @finished_at)
+    ON CONFLICT(run_id, agent_name) DO UPDATE SET
+      status = excluded.status,
+      output_json = excluded.output_json,
+      error = excluded.error,
+      started_at = excluded.started_at,
+      finished_at = excluded.finished_at
+    `
+  ).run(row);
 }
 
 export function insertRotation(row: {

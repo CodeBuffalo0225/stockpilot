@@ -3,20 +3,20 @@
 
 import { z } from 'zod';
 
-// Agent 1 — Perplexity News Puller output
+// Agent 1 — signal extractor output (lib/scraper.ts extractSignalFromHeadlines).
+// Must mirror the TickerBrief interface in lib/scraper.ts minus `source`
+// (source is attached by the caller, not returned by the model).
 export const TickerBriefSchema = z.object({
-  ticker: z.string().min(1).max(5).toUpperCase(),
+  ticker: z.string().min(1).max(5),
   headline: z.string().min(10),
   signal: z.enum(['bullish', 'bearish', 'neutral']),
   catalyst: z.string().min(5),
   risk: z.string().min(5),
-  price_target_change: z.string().nullable(),
-  earnings_note: z.string().nullable(),
-  momentum: z.enum(['short', 'medium', 'long']),
   // PATCH 02: drop .int() — Perplexity returns fractional confidence (e.g. 7.5).
-  // Floor at the call site after parse.
+  // Floor at the call site after parse (still done before validation runs).
   confidence: z.number().min(1).max(10),
-  source: z.string().optional(),
+  price: z.string(),
+  change_pct: z.string(),
 });
 export type TickerBriefValidated = z.infer<typeof TickerBriefSchema>;
 
@@ -56,3 +56,17 @@ export const AllocatorOutputSchema = z.object({
   thesis: z.string().min(50),
 });
 export type AllocatorOutput = z.infer<typeof AllocatorOutputSchema>;
+
+// Per-item fallback schema for Agent 4. `tier` is recomputed from
+// alpha_score in enforceTiers() regardless of what the model returns, so it
+// isn't validated strictly here — only the fields enforceTiers actually
+// reads (ticker, notes) need to be well-formed. Used to salvage individual
+// good rows out of a response that fails AllocatorOutputSchema as a whole,
+// instead of silently casting the entire raw payload.
+export const AllocationItemLooseSchema = z.object({
+  ticker: z.string().min(1).max(5),
+  tier: z.number(),
+  position_pct: z.number(),
+  entry_note: z.string(),
+  stop_loss_note: z.string(),
+});

@@ -34,6 +34,7 @@ import { runAgent6 } from './agents/agent6-call-persister';
 import { runAgent7 } from './agents/agent7-outcome-scorer';
 import { runAgent8 } from './agents/agent8-rotation-suggester';
 import { sendReportEmail, sendFailureEmail } from './lib/mailer';
+import { getOrCreateRun, finishRun, getCheckpoint, recordAgentRun } from './lib/db';
 
 const REPORTS_DIR = path.join(__dirname, 'reports');
 const WATCHLIST_PATH = path.join(__dirname, 'data', 'watchlist.json');
@@ -47,11 +48,71 @@ function loadWatchlist(): WatchlistItem[] {
   return JSON.parse(raw) as WatchlistItem[];
 }
 
+// Resumability: if the orchestrator dies mid-run (e.g. Agent 4 throws after
+// Agents 1-3 already burned Playwright scrapes + Claude calls), a retry on
+// the same calendar date replays each stage's checkpointed output instead
+// of re-running it. Failed stages are NOT cached — they re-execute on retry.
+async function runStage<T>(
+  runId: number,
+  agentName: string,
+  fn: () => Promise<T>
+): Promise<T> {
+  const cached = getCheckpoint(runId, agentName);
+  if (cached !== null) {
+    console.log(`[Orchestrator] ${agentName} — resuming from checkpoint`);
+    return cached as T;
+  }
+  const startedAt = new Date().toISOString();
+  try {
+    const result = await fn();
+    recordAgentRun({
+      run_id: runId,
+      agent_name: agentName,
+      status: 'ok',
+      output_json: JSON.stringify(result),
+      error: null,
+      started_at: startedAt,
+      finished_at: new Date().toISOString(),
+    });
+    return result;
+  } catch (e) {
+    recordAgentRun({
+      run_id: runId,
+      agent_name: agentName,
+      status: 'failed',
+      output_json: null,
+      error: (e as Error).message,
+      started_at: startedAt,
+      finished_at: new Date().toISOString(),
+    });
+    throw e;
+  }
+}
+
 export async function runOrchestrator(): Promise<void> {
   const runStart = Date.now();
   const date = todayIso();
   console.log(`\n========== StockPilot run ${date} ==========`);
 
+  const run = getOrCreateRun(date);
+  const runId = run.id;
+  if (run.status !== 'running') {
+    console.log(`[Orchestrator] Retrying run ${date} (previous status: ${run.status})`);
+  }
+
+  try {
+    await runOrchestratorBody(runId, date, runStart);
+  } catch (e) {
+    finishRun(runId, 'failed');
+    throw e;
+  }
+}
+
+async function runOrchestratorBody(
+  runId: number,
+  date: string,
+  runStart: number
+): Promise<void> {
   // 1. Load the fixed core watchlist
   const core = loadWatchlist();
   console.log(`[Orchestrator] Loaded ${core.length} core tickers`);
@@ -60,7 +121,7 @@ export async function runOrchestrator(): Promise<void> {
   //     Core + sleeve = the effective watchlist for this run.
   let agent0Result;
   try {
-    agent0Result = await runAgent0(core, date);
+    agent0Result = await runStage(runId, 'agent0', () => runAgent0(core, date));
   } catch (e) {
     console.error('[Orchestrator] Agent 0 failed:', (e as Error).message);
   }
@@ -77,7 +138,7 @@ export async function runOrchestrator(): Promise<void> {
   );
 
   // 2. Agent 1 — scrape Perplexity Finance + FMP fallback
-  const briefs = await runAgent1(watchlist);
+  const briefs = await runStage(runId, 'agent1', () => runAgent1(watchlist));
   if (briefs.length === 0) {
     throw new Error('Agent 1 produced 0 briefs — aborting run');
   }
@@ -113,26 +174,26 @@ export async function runOrchestrator(): Promise<void> {
   }
 
   // 3. Agent 2 — questions (skipped briefs are not asked)
-  const questions: QuestionResult[] = await runAgent2(toQuestion);
+  const questions: QuestionResult[] = await runStage(runId, 'agent2', () =>
+    runAgent2(toQuestion)
+  );
 
   // 4. Agent 3 — score (single call, full context for BUY cap)
-  const scored = await runAgent3(briefs, questions, date);
+  const scored = await runStage(runId, 'agent3', () => runAgent3(briefs, questions, date));
 
   // 5. Agent 4 — allocate (BUY signals only get full size)
-  const allocator = await runAgent4(scored, date);
+  const allocator = await runStage(runId, 'agent4', () => runAgent4(scored, date));
 
-  // 6. Agent 5 — Notion logger (errors logged, do not block email)
-  const { unansweredCount, notionHealthFlag } = await runAgent5(
-    questions,
-    scored,
-    allocator,
-    date
+  // 6. Agent 5 — Notion logger (errors logged, do not block email). Checkpointed
+  // so a retry doesn't double-write Notion pages for the same date.
+  const { unansweredCount, notionHealthFlag } = await runStage(runId, 'agent5', () =>
+    runAgent5(questions, scored, allocator, date)
   );
 
   // 7. Agent 6 — persist today's calls into SQLite (Loop A: outcome tracking)
   let callPersistResult;
   try {
-    callPersistResult = await runAgent6(scored, briefs, date);
+    callPersistResult = await runStage(runId, 'agent6', () => runAgent6(scored, briefs, date));
   } catch (e) {
     console.error('[Orchestrator] Agent 6 failed:', (e as Error).message);
   }
@@ -140,7 +201,7 @@ export async function runOrchestrator(): Promise<void> {
   // 8. Agent 7 — score matured 5d/15d/30d windows
   let outcomeResult;
   try {
-    outcomeResult = await runAgent7(date);
+    outcomeResult = await runStage(runId, 'agent7', () => runAgent7(date));
   } catch (e) {
     console.error('[Orchestrator] Agent 7 failed:', (e as Error).message);
   }
@@ -149,7 +210,7 @@ export async function runOrchestrator(): Promise<void> {
   //     Operates on the fixed CORE only — the sleeve rotates itself daily.
   let rotationResult;
   try {
-    rotationResult = await runAgent8(core, date);
+    rotationResult = await runStage(runId, 'agent8', () => runAgent8(core, date));
   } catch (e) {
     console.error('[Orchestrator] Agent 8 failed:', (e as Error).message);
   }
@@ -210,6 +271,7 @@ export async function runOrchestrator(): Promise<void> {
     )
   );
   console.log(`[Orchestrator] Saved ${reportPath}`);
+  finishRun(runId, 'ok');
 
   console.log(
     `========== Run complete in ${Date.now() - runStart}ms ==========\n`

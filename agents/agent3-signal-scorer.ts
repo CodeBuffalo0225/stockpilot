@@ -103,7 +103,7 @@ Return JSON array:
 }
 
 // FIX 01: Code-level BUY cap. Never trust the model to enforce this.
-function enforceBuyCap(scored: ScoredSignal[]): ScoredSignal[] {
+export function enforceBuyCap(scored: ScoredSignal[]): ScoredSignal[] {
   const cap = THRESHOLDS.BUY_CAP;
   const buys = scored
     .filter((s) => s.verdict === 'BUY')

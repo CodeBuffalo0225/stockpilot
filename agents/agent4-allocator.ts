@@ -7,7 +7,7 @@
 //   <4.0 / SKIP → 0%, omitted
 
 import { callClaude, parseJsonObject } from '../lib/claude';
-import { AllocatorOutputSchema } from '../lib/schemas';
+import { AllocatorOutputSchema, AllocationItemLooseSchema } from '../lib/schemas';
 import { THRESHOLDS } from '../config/thresholds';
 import type { ScoredSignal } from './agent3-signal-scorer';
 
@@ -76,7 +76,7 @@ Return JSON:
 }
 
 // Defensive sizing — enforces tier table even if model drifts.
-function enforceTiers(
+export function enforceTiers(
   alloc: AllocationItem[],
   scored: ScoredSignal[]
 ): AllocationItem[] {
@@ -128,20 +128,51 @@ export async function runAgent4(
   });
 
   const rawParsed = parseJsonObject<unknown>(text);
-  // Validate via Zod, but fall back to a permissive read of allocation/thesis
-  // so a single bad field never blocks allocation (enforceTiers re-derives sizing).
   const validated = AllocatorOutputSchema.safeParse(rawParsed);
-  if (!validated.success) {
+
+  let allocationInput: AllocationItem[];
+  let thesis: string;
+
+  if (validated.success) {
+    allocationInput = validated.data.allocation;
+    thesis = validated.data.thesis;
+  } else {
+    // Degrade loudly, not silently: don't cast the whole raw payload and
+    // hope for the best. Validate each row individually against a loose
+    // schema (tier isn't checked — enforceTiers recomputes it from
+    // alpha_score below) and drop + log only the rows that are actually
+    // malformed, so one bad field doesn't discard every sized position.
     console.error(
-      '[Agent4] Schema validation failed, falling back to raw parse:',
-      validated.error.issues.slice(0, 3)
+      '[Agent4] AllocatorOutputSchema validation failed:',
+      validated.error.issues.slice(0, 5)
     );
+    const rawAlloc = (rawParsed as { allocation?: unknown[] })?.allocation;
+    allocationInput = [];
+    if (Array.isArray(rawAlloc)) {
+      for (const item of rawAlloc) {
+        const itemResult = AllocationItemLooseSchema.safeParse(item);
+        if (itemResult.success) {
+          allocationInput.push(itemResult.data);
+        } else {
+          console.error(
+            `[Agent4] Dropping malformed allocation row:`,
+            JSON.stringify(item),
+            itemResult.error.issues.map((i) => i.message).join('; ')
+          );
+        }
+      }
+    }
+    const rawThesis = (rawParsed as { thesis?: unknown })?.thesis;
+    thesis = typeof rawThesis === 'string' ? rawThesis : '';
+    if (!thesis) {
+      console.error('[Agent4] No usable thesis in malformed response — emitting empty thesis');
+    }
   }
-  const parsed = (validated.success ? validated.data : (rawParsed as AllocatorOutput));
-  const allocation = enforceTiers(parsed.allocation || [], scored);
+
+  const allocation = enforceTiers(allocationInput, scored);
 
   console.log(
     `[Agent4] End — ${allocation.length} positions sized (${Date.now() - start}ms)`
   );
-  return { allocation, thesis: parsed.thesis };
+  return { allocation, thesis };
 }

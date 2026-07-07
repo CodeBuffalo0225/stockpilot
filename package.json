@@ -8,7 +8,8 @@
     "run-now": "ts-node orchestrator.ts",
     "debug-scraper": "SCRAPER_DEBUG=true ts-node agents/agent1-scraper.ts",
     "rotate": "ts-node cli/rotate.ts",
-    "build": "tsc"
+    "build": "tsc",
+    "test": "vitest run"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.30.1",
@@ -25,6 +26,7 @@
     "@types/node": "^22.5.0",
     "@types/node-cron": "^3.0.11",
     "ts-node": "^10.9.2",
-    "typescript": "^5.5.4"
+    "typescript": "^5.5.4",
+    "vitest": "^4.1.10"
   }
 }
