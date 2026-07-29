@@ -96,6 +96,14 @@ export async function runOrchestrator(): Promise<void> {
 
   const run = getOrCreateRun(date);
   const runId = run.id;
+  const forceRerun = process.env.STOCKPILOT_FORCE_RERUN === 'true';
+  if (run.status === 'ok' && !forceRerun) {
+    console.log(
+      `[Orchestrator] Run ${date} already completed — exiting without replay. ` +
+        `Set STOCKPILOT_FORCE_RERUN=true to force a new pass.`
+    );
+    return;
+  }
   if (run.status !== 'running') {
     console.log(`[Orchestrator] Retrying run ${date} (previous status: ${run.status})`);
   }
