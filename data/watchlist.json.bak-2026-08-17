@@ -1,0 +1,17 @@
+[
+  { "ticker": "MSFT", "name": "Microsoft",                "sector": "Technology" },
+  { "ticker": "NVDA", "name": "Nvidia",                   "sector": "Semiconductors" },
+  { "ticker": "IBM",  "name": "IBM",                      "sector": "Technology/Services" },
+  { "ticker": "GOOGL","name": "Alphabet",                 "sector": "Communication Services" },
+  { "ticker": "HD",   "name": "Home Depot",               "sector": "Consumer Discretionary" },
+  { "ticker": "PG",   "name": "Procter & Gamble",         "sector": "Consumer Staples" },
+  { "ticker": "BP",   "name": "BP plc",                   "sector": "Energy" },
+  { "ticker": "JPM",  "name": "JPMorgan Chase",           "sector": "Financials" },
+  { "ticker": "UNH",  "name": "UnitedHealth Group",       "sector": "Healthcare" },
+  { "ticker": "LMT",  "name": "Lockheed Martin",          "sector": "Industrials/Defense" },
+  { "ticker": "CMI",  "name": "Cummins",                  "sector": "Industrials/Machinery" },
+  { "ticker": "NEE",  "name": "NextEra Energy",           "sector": "Utilities" },
+  { "ticker": "AMD",  "name": "AMD",                      "sector": "Semiconductors" },
+  { "ticker": "SNDK", "name": "SanDisk",                  "sector": "Semiconductors/Memory" },
+  { "ticker": "COHR", "name": "Coherent",                 "sector": "Semiconductors/Photonics" }
+]
