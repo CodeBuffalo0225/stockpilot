@@ -30,6 +30,7 @@ Rules:
 - Only size BUY verdicts at full tier weight
 - WATCH verdicts get 1.5% max as a monitoring position
 - SKIP = 0%, do not mention in allocation table
+- "tier" MUST be a number: 1, 2, or 3 (never a string like "WATCH"). BUY 8.0+ = 1, BUY 6.0-7.9 = 2, WATCH = 3
 - Thesis: 3-5 sentences. Macro/sector narrative today. Top 2-3 conviction moves. Key risk to watch. Write like Ian Dunlap — direct, confident, no hedging.
 
 Return ONLY valid JSON. No preamble. No markdown.`;
