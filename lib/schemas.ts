@@ -65,7 +65,8 @@ export type AllocatorOutput = z.infer<typeof AllocatorOutputSchema>;
 // instead of silently casting the entire raw payload.
 export const AllocationItemLooseSchema = z.object({
   ticker: z.string().min(1).max(5),
-  tier: z.number(),
+  // Model sometimes returns the verdict ("WATCH") here; enforceTiers overwrites it.
+  tier: z.coerce.number().catch(0),
   position_pct: z.number(),
   entry_note: z.string(),
   stop_loss_note: z.string(),
