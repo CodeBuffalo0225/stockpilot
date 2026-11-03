@@ -10,6 +10,7 @@
 //   8. Agent 7 — Outcome scorer (score matured 5d/15d/30d windows)     [Loop A]
 //   9. Agent 8 — Rotation suggester (flag + rank candidates)             [Loop C]
 //  10. Compose + send email report (includes rotation suggestions)
+//  10b. Public subscriber brief → Buttondown draft (gated; see lib/mailer-public.ts)
 //  11. Save reports/{DATE}.json
 //
 // On any single-ticker failure: retry once, skip, log error — never crash.
@@ -34,6 +35,7 @@ import { runAgent6 } from './agents/agent6-call-persister';
 import { runAgent7 } from './agents/agent7-outcome-scorer';
 import { runAgent8 } from './agents/agent8-rotation-suggester';
 import { sendReportEmail, sendFailureEmail } from './lib/mailer';
+import { sendPublicBrief } from './lib/mailer-public';
 import { getOrCreateRun, finishRun, getCheckpoint, recordAgentRun } from './lib/db';
 
 const REPORTS_DIR = path.join(__dirname, 'reports');
@@ -243,6 +245,10 @@ async function runOrchestratorBody(
     console.error('[Orchestrator] Email send failed:', (e as Error).message);
   }
 
+  // 10b. Public subscriber brief → Buttondown (draft by default). Gated in
+  //      lib/mailer-public.ts on BUTTONDOWN_API_KEY + PUBLIC_DATA_LICENSED; never throws.
+  const publicBrief = await sendPublicBrief({ date, scored, thesis: allocator.thesis, unansweredCount });
+
   // 11. Save reports/{DATE}.json
   if (!fs.existsSync(REPORTS_DIR)) {
     fs.mkdirSync(REPORTS_DIR, { recursive: true });
@@ -273,6 +279,7 @@ async function runOrchestratorBody(
         callPersist: callPersistResult ?? null,
         outcomes: outcomeResult ?? null,
         rotations: rotationResult ?? null,
+        publicBrief,
       },
       null,
       2
