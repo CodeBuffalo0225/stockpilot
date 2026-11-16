@@ -1,62 +1,62 @@
 {
   "MSFT": {
-    "quiet_streak": 6,
-    "last_updated": "2026-11-06"
+    "quiet_streak": 1,
+    "last_updated": "2026-11-16"
   },
   "NVDA": {
     "quiet_streak": 0,
-    "last_updated": "2026-11-06"
+    "last_updated": "2026-11-16"
   },
   "IBM": {
-    "quiet_streak": 3,
-    "last_updated": "2026-11-06"
+    "quiet_streak": 2,
+    "last_updated": "2026-11-16"
   },
   "GOOGL": {
-    "quiet_streak": 1,
-    "last_updated": "2026-11-06"
+    "quiet_streak": 0,
+    "last_updated": "2026-11-16"
   },
   "JPM": {
-    "quiet_streak": 24,
-    "last_updated": "2026-11-06"
+    "quiet_streak": 0,
+    "last_updated": "2026-11-16"
   },
   "UNH": {
-    "quiet_streak": 0,
-    "last_updated": "2026-11-06"
+    "quiet_streak": 6,
+    "last_updated": "2026-11-16"
   },
   "LMT": {
-    "quiet_streak": 0,
-    "last_updated": "2026-11-06"
+    "quiet_streak": 1,
+    "last_updated": "2026-11-16"
   },
   "AMD": {
     "quiet_streak": 0,
-    "last_updated": "2026-11-06"
+    "last_updated": "2026-11-16"
   },
   "HD": {
-    "quiet_streak": 0,
-    "last_updated": "2026-11-06"
+    "quiet_streak": 3,
+    "last_updated": "2026-11-16"
   },
   "PG": {
-    "quiet_streak": 6,
-    "last_updated": "2026-11-06"
+    "quiet_streak": 3,
+    "last_updated": "2026-11-16"
   },
   "BP": {
     "quiet_streak": 0,
-    "last_updated": "2026-11-06"
+    "last_updated": "2026-11-16"
   },
   "CMI": {
-    "quiet_streak": 0,
-    "last_updated": "2026-11-06"
+    "quiet_streak": 3,
+    "last_updated": "2026-11-16"
   },
   "NEE": {
-    "quiet_streak": 0,
-    "last_updated": "2026-11-06"
+    "quiet_streak": 1,
+    "last_updated": "2026-11-16"
   },
   "SNDK": {
     "quiet_streak": 0,
-    "last_updated": "2026-11-06"
+    "last_updated": "2026-11-16"
   },
   "COHR": {
-    "quiet_streak": 0,
-    "last_updated": "2026-11-06"
+    "quiet_streak": 1,
+    "last_updated": "2026-11-16"
   }
 }
