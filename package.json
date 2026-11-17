@@ -8,6 +8,7 @@
     "run-now": "ts-node orchestrator.ts",
     "debug-scraper": "SCRAPER_DEBUG=true ts-node agents/agent1-scraper.ts",
     "rotate": "ts-node cli/rotate.ts",
+    "score": "ts-node cli/score-outcomes.ts",
     "build": "tsc",
     "test": "vitest run"
   },

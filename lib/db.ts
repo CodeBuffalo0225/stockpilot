@@ -106,6 +106,21 @@ const MIGRATIONS: Array<{ version: number; name: string; sql: string }> = [
       );
     `,
   },
+  {
+    // Outcomes move to an end-of-day basis so every verdict can be scored the
+    // same way: entry = close on call_date, exit = close N trading days on.
+    // The brief's price (calls.entry_price) is a pre-market string from the
+    // news source and stays as a record only. Old BUY-only rows are copied to
+    // outcomes_brief_legacy before Agent 7 rescores them.
+    version: 4,
+    name: 'eod_entry_basis',
+    sql: `
+      ALTER TABLE calls ADD COLUMN entry_close     REAL;
+      ALTER TABLE calls ADD COLUMN spy_entry_close REAL;
+      CREATE TABLE IF NOT EXISTS outcomes_brief_legacy AS SELECT * FROM outcomes;
+      ALTER TABLE outcomes ADD COLUMN entry_basis TEXT NOT NULL DEFAULT 'brief';
+    `,
+  },
 ];
 
 function migrate(db: Database.Database): void {
@@ -183,11 +198,14 @@ export interface PendingScore {
   call_id: number;
   ticker: string;
   call_date: string;
-  entry_price: number;
-  spy_entry_price: number;
+  verdict: 'BUY' | 'WATCH' | 'SKIP';
+  entry_close: number | null;
+  spy_entry_close: number | null;
 }
 
-// Find BUY calls that need a window scored (window matured, no outcome row yet).
+// Find calls of ANY verdict that need a window scored: the window has
+// matured and there is no end-of-day outcome row yet. Rows still on the old
+// 'brief' basis count as pending so they get rescored on the EOD basis.
 export function pendingScoresForWindow(
   windowDays: number,
   todayIso: string
@@ -196,19 +214,29 @@ export function pendingScoresForWindow(
   return db
     .prepare(
       `
-      SELECT c.id AS call_id, c.ticker, c.call_date,
-             c.entry_price, c.spy_entry_price
+      SELECT c.id AS call_id, c.ticker, c.call_date, c.verdict,
+             c.entry_close, c.spy_entry_close
       FROM   calls c
       LEFT JOIN outcomes o
         ON o.call_id = c.id AND o.window_days = ?
-      WHERE  c.verdict = 'BUY'
-        AND  c.entry_price IS NOT NULL
-        AND  c.spy_entry_price IS NOT NULL
-        AND  o.call_id IS NULL
-        AND  date(c.call_date, '+' || ? || ' days') <= date(?)
+      WHERE  (o.call_id IS NULL OR o.entry_basis != 'eod_close')
+        AND  date(c.call_date, '+' || ? || ' days') < date(?)
+      ORDER  BY c.ticker, c.call_date
       `
     )
     .all(windowDays, windowDays, todayIso) as PendingScore[];
+}
+
+// Entry closes are fetched once per call and kept, so every window of the
+// same call is measured from the same starting price.
+export function setEntryCloses(
+  callId: number,
+  entryClose: number,
+  spyEntryClose: number
+): void {
+  getDb()
+    .prepare(`UPDATE calls SET entry_close = ?, spy_entry_close = ? WHERE id = ?`)
+    .run(entryClose, spyEntryClose, callId);
 }
 
 export interface OutcomeRow {
@@ -227,11 +255,42 @@ export function insertOutcome(row: OutcomeRow): void {
     `
     INSERT OR REPLACE INTO outcomes
       (call_id, window_days, scored_date, ticker_return_pct,
-       spy_return_pct, excess_return_pct, hit)
+       spy_return_pct, excess_return_pct, hit, entry_basis)
     VALUES (@call_id, @window_days, @scored_date, @ticker_return_pct,
-            @spy_return_pct, @excess_return_pct, @hit)
+            @spy_return_pct, @excess_return_pct, @hit, 'eod_close')
     `
   ).run(row);
+}
+
+export interface VerdictScore {
+  verdict: string;
+  window_days: number;
+  n: number;
+  avg_return_pct: number;
+  avg_spy_pct: number;
+  avg_excess_pct: number;
+  beat_spy_pct: number; // share of calls with excess > 0
+}
+
+// The baseline: how each verdict did against SPY on the EOD basis. BUY only
+// means something if it beats SKIP here.
+export function scoreByVerdict(): VerdictScore[] {
+  return getDb()
+    .prepare(
+      `
+      SELECT c.verdict, o.window_days, COUNT(*) AS n,
+             AVG(o.ticker_return_pct) AS avg_return_pct,
+             AVG(o.spy_return_pct)    AS avg_spy_pct,
+             AVG(o.excess_return_pct) AS avg_excess_pct,
+             100.0 * AVG(o.excess_return_pct > 0) AS beat_spy_pct
+      FROM   outcomes o
+      JOIN   calls    c ON c.id = o.call_id
+      WHERE  o.entry_basis = 'eod_close'
+      GROUP  BY c.verdict, o.window_days
+      ORDER  BY o.window_days, c.verdict
+      `
+    )
+    .all() as VerdictScore[];
 }
 
 // ---------- Watchlist health (Agent 8) ----------
