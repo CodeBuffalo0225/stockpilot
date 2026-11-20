@@ -11,6 +11,8 @@
 //
 // Public format (locked 2026-10-27 handoff): BUY -> "Strong", WATCH -> "Watch",
 // no allocation %, no scores, no forecasts, max 3 Strong.
+// The daily thesis paragraph is NOT published: it is the private, sized, forward-
+// looking view and cannot be sanitized sentence by sentence (2026-11-19 preview).
 
 import type { ScoredRecord } from './notion';
 
@@ -26,7 +28,7 @@ const AI_NOTE = 'Written by AI agents from the morning news.';
 export interface PublicBriefInput {
   date: string; // YYYY-MM-DD
   scored: ScoredRecord[];
-  thesis: string;
+  thesis: string; // accepted for the orchestrator's call shape; never published
   unansweredCount: number;
 }
 
@@ -53,13 +55,20 @@ const BLOCKED: RegExp[] = [
   /\b(buy|buying|sell|selling|short|accumulate|add to|trim|exit|allocat\w*|position[- ]?siz\w*|sizing|portfolio|stop[- ]loss|entry)\b/i,
   /\b(alpha|outperform\w*|underperform\w*|beat the market|price target|target price|upside|downside|guarantee\w*|risk[- ]free)\b/i,
   /\b(will|should|expect\w*|likely to|poised|set to|on track|going to|forecast\w*|predict\w*|recover\w*|rally|breakout|immediately)\b/i,
+  /\b(conviction|mean[- ]reversion|snap[- ]?back|oversold|overbought|mispriced|setup|insurance|sized|stops?)\b/i,
   /\d+(\.\d+)?\s*%|\$\s?\d/,
 ];
 
+// Split only at a real sentence boundary: terminal punctuation, whitespace, then a
+// capital, quote or bracket. A bare "." inside "2.46%" or "U.S." is not a boundary.
+const MIN_WORDS = 3;
+
 export function sanitizeSentences(text: string): string {
-  const kept = (text.match(/[^.!?]+[.!?]*/g) ?? [])
+  const kept = (text ?? '')
+    .split(/(?<=[.!?])\s+(?=[A-Z"'(])/)
     .map((s) => s.trim())
-    .filter((s) => s && !BLOCKED.some((re) => re.test(s)));
+    .filter((s) => s.split(/\s+/).length >= MIN_WORDS) // a lone fragment is never kept
+    .filter((s) => !BLOCKED.some((re) => re.test(s)));
   return kept.join(' ');
 }
 
@@ -74,17 +83,19 @@ export function composePublicBrief(input: PublicBriefInput): { subject: string; 
     const why = sanitizeSentences(s.reasoning);
     return `- **${s.ticker}** · ${label}${why ? `: ${why}` : ''}`;
   };
-  const thesis = sanitizeSentences(input.thesis);
   const n = input.unansweredCount;
 
   const body = [
     '## Strong',
     strong.length ? strong.map((s) => line(s, 'Strong')).join('\n') : '_Nothing today._',
     '',
-    ...(thesis ? ['## The thesis', thesis, ''] : []),
     ...(watch.length ? ['## Watching', watch.map((s) => line(s, 'Watch')).join('\n'), ''] : []),
     "## Couldn't answer",
-    n === 1 ? '1. Dig into that first.' : `${n}. Dig into those first.`,
+    n === 0
+      ? "_Nothing left unanswered today._"
+      : n === 1
+        ? "1 question the agents couldn't answer. Dig there first."
+        : `${n} questions the agents couldn't answer. Dig into those first.`,
     '',
     '---',
     `<small>${AI_NOTE} ${DISCLAIMER}</small>`,
